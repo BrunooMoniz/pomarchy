@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.menubar",
+  "name": "Pomarchy Menu Bar",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "System menu and the active app's name and menus, like the Mac menu bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Pomarchy: menu e app ativo",
+    "description": "Menu do sistema e o app em uso, no canto esquerdo da barra",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}

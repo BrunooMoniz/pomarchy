@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.switcher",
+  "name": "Pomarchy App Switcher",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Alt+Tab to switch apps, like Cmd+Tab on a Mac.",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Switcher.qml"
+  }
+}

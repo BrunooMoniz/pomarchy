@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pomarchy OS: a barra acompanha o tema (gancho theme-set do Omarchy; $1 é o
+# tema). Com um tema Pomarchy, ou com "Manter o Pomarchy em qualquer tema"
+# ligado, fica a barra de menus do Mac; com outro tema, volta a barra do
+# Omarchy exatamente como era.
+pomar="$HOME/.local/share/pomar/current/bin/pomar"
+[[ -x $pomar ]] || exit 0
+log="$HOME/.local/state/pomar/gancho-tema.log"
+mkdir -p -- "${log%/*}"
+{
+  printf '%s tema=%s\n' "$(date -Is)" "${1:-?}"
+  "$pomar" bar auto
+} >>"$log" 2>&1 || true

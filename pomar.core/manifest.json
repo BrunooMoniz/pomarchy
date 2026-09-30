@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.core",
+  "name": "Pomarchy OS",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Pomarchy base: Mac-style typography and the first-run welcome.",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}

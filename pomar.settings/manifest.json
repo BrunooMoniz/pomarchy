@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.settings",
+  "name": "Pomarchy Settings",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Pomarchy settings and the welcome tour.",
+  "kinds": [
+    "panel"
+  ],
+  "entryPoints": {
+    "panel": "Settings.qml"
+  }
+}

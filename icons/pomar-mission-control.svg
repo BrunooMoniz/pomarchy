@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Ícone do Pomar (omarchy-pomar): Mission Control, janelas espalhadas e as mesas no alto. -->
+  <defs>
+    <linearGradient id="fundo" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#6d8dff"/>
+      <stop offset="1" stop-color="#2640b8"/>
+    </linearGradient>
+    <linearGradient id="brilho" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="janela" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6ebf7"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="6" y="6" width="116" height="116" rx="27" fill="url(#fundo)"/>
+    <rect x="6" y="6" width="116" height="116" rx="27" fill="url(#brilho)"/>
+    <rect x="6.5" y="6.5" width="115" height="115" rx="26.5" fill="none" stroke="#ffffff" stroke-opacity="0.16"/>
+  </g>
+  <!-- mesas no alto, a do meio é a atual -->
+  <rect x="31" y="17" width="20" height="12" rx="3.5" fill="#ffffff" fill-opacity="0.34"/>
+  <rect x="54" y="17" width="20" height="12" rx="3.5" fill="#ffffff" fill-opacity="0.92"/>
+  <rect x="77" y="17" width="20" height="12" rx="3.5" fill="#ffffff" fill-opacity="0.34"/>
+  <g>
+    <!-- janela de cima, à esquerda -->
+    <rect x="16" y="38" width="46" height="34" rx="5" fill="url(#janela)"/>
+    <path d="M21,38 h36 a5,5 0 0 1 5,5 v3 h-46 v-3 a5,5 0 0 1 5,-5 z" fill="#f2564a"/>
+    <rect x="21" y="52" width="26" height="3.2" rx="1.6" fill="#c3cce2"/>
+    <rect x="21" y="59" width="34" height="3.2" rx="1.6" fill="#d6ddec"/>
+    <!-- janela de cima, à direita -->
+    <rect x="68" y="36" width="44" height="38" rx="5" fill="url(#janela)"/>
+    <path d="M73,36 h34 a5,5 0 0 1 5,5 v3 h-44 v-3 a5,5 0 0 1 5,-5 z" fill="#4cc15e"/>
+    <rect x="73" y="50" width="16" height="16" rx="3" fill="#cfe9d3"/>
+    <rect x="93" y="51" width="14" height="3.2" rx="1.6" fill="#c3cce2"/>
+    <rect x="93" y="58" width="10" height="3.2" rx="1.6" fill="#d6ddec"/>
+    <!-- janela de baixo, à esquerda -->
+    <rect x="20" y="80" width="40" height="30" rx="5" fill="url(#janela)"/>
+    <path d="M25,80 h30 a5,5 0 0 1 5,5 v3 h-40 v-3 a5,5 0 0 1 5,-5 z" fill="#f7a531"/>
+    <rect x="25" y="94" width="22" height="3.2" rx="1.6" fill="#c3cce2"/>
+    <rect x="25" y="101" width="28" height="3.2" rx="1.6" fill="#d6ddec"/>
+    <!-- janela de baixo, à direita -->
+    <rect x="66" y="82" width="44" height="28" rx="5" fill="url(#janela)"/>
+    <path d="M71,82 h34 a5,5 0 0 1 5,5 v3 h-44 v-3 a5,5 0 0 1 5,-5 z" fill="#8a63ee"/>
+    <rect x="71" y="96" width="30" height="3.2" rx="1.6" fill="#c3cce2"/>
+    <rect x="71" y="103" width="20" height="3.2" rx="1.6" fill="#d6ddec"/>
+  </g>
+</svg>

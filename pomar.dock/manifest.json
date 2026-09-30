@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.dock",
+  "name": "Pomarchy Dock",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Mac-style Dock with favorites, running apps, minimized windows, magnification and auto-hide.",
+  "kinds": [
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Dock.qml"
+  }
+}

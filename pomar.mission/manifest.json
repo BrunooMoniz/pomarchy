@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.mission",
+  "name": "Pomarchy Mission Control",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Live thumbnails of every window and desktop, with a gesture that follows your fingers.",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Mission.qml"
+  }
+}

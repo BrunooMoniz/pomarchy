@@ -1,0 +1,37 @@
+# Pomarchy (claro): as cores de sistema do macOS no modo claro.
+mode = "light"
+
+accent = "#007aff"
+selection = "#b3d7ff"
+muted = "#8e8e93"
+
+background = "#f6f6f8"
+dark_background = "#ececef"
+darker_background = "#e2e2e6"
+lighter_background = "#ffffff"
+
+foreground = "#1d1d1f"
+dark_foreground = "#6e6e73"
+light_foreground = "#3a3a3c"
+bright_foreground = "#000000"
+
+# Terminal: tons escuros das cores do sistema, legíveis sobre fundo claro.
+red = "#d70015"
+yellow = "#a05a00"
+orange = "#c93400"
+green = "#248a3d"
+cyan = "#0071a4"
+blue = "#0040dd"
+magenta = "#8944ab"
+brown = "#7f6545"
+
+bright_red = "#ff3b30"
+bright_yellow = "#b25000"
+bright_green = "#34c759"
+bright_cyan = "#30b0c7"
+bright_blue = "#007aff"
+bright_magenta = "#af52de"
+
+# Bordas de janela quase invisíveis, como no Mac: o foco aparece pela sombra.
+hyprland_active_border = "rgba(00000033)"
+hyprland_inactive_border = "rgba(0000001a)"

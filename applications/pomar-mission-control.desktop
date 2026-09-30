@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Mission Control
+Name[en]=Mission Control
+GenericName=Todas as janelas
+GenericName[en]=All windows
+Comment=Veja todas as janelas e mesas de uma vez
+Comment[en]=See all your windows and desktops at once
+Exec=@POMAR_BIN@ open mission
+Icon=pomar-mission-control
+Terminal=false
+Categories=Utility;
+Keywords=janelas;mesas;mission;control;pomar;
+Keywords[en]=windows;desktops;workspaces;mission;control;pomar;
+StartupNotify=false
+X-Pomar=true

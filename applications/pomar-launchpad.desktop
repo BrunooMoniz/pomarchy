@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Launchpad
+Name[en]=Launchpad
+GenericName=Todos os apps
+GenericName[en]=All apps
+Comment=Todos os seus apps numa tela só, com busca
+Comment[en]=All your apps on one screen, with search
+Exec=@POMAR_BIN@ open launchpad
+Icon=pomar-launchpad
+Terminal=false
+Categories=Utility;
+Keywords=apps;aplicativos;programas;launchpad;pomar;
+Keywords[en]=apps;applications;programs;launchpad;pomar;
+StartupNotify=false
+X-Pomar=true

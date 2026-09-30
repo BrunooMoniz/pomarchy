@@ -1,0 +1,2000 @@
+#!/usr/bin/env bash
+# pomar: o comando do Pomarchy, o tema que dá ao Omarchy 4 o jeito do Mac.
+#
+#   pomar help      mostra tudo o que dá para fazer
+#
+# Este arquivo também é a biblioteca do instalador e do desinstalador: eles o
+# carregam com "source" para usar os mesmos caminhos, as mesmas mensagens e o
+# mesmo kit em Python, que edita JSON e o hyprland.lua sem estragar nada do que
+# já estava lá (grava num arquivo temporário e troca de uma vez só).
+
+set -euo pipefail
+
+# ------------------------------------------------------------------ idioma
+# As mensagens saem em inglês ou em português. A escolha é feita uma vez, ao
+# carregar este arquivo (o instalador e o desinstalador também o carregam), e
+# vai para o kit em Python em POMAR_UI_LANG. Vale a primeira que decidir:
+#   1. --lang en|pt (install.sh, uninstall.sh ou pomar --lang);
+#   2. a variável POMAR_LANG (en ou pt);
+#   3. o "language" de ~/.config/pomar/settings.json, quando é "pt" ou "en";
+#   4. LC_ALL, LC_MESSAGES, LANG ou LANGUAGE começando com "pt": português;
+#   5. senão, inglês.
+# Os ajustes são lidos sem o Python (o idioma já vale para o aviso de que falta
+# o Python), direto do caminho: o POMAR_SETTINGS ainda não existe aqui em cima.
+# O install.sh e o uninstall.sh têm uma cópia igual desta função e do L para o
+# que dizem quando este arquivo não está ao lado deles (rodando sozinhos).
+pomar_lang() {
+  local choice="${1:-}" value settings=""
+  if [[ -z $choice ]]; then
+    value="${POMAR_LANG:-}"
+    case "${value,,}" in en | pt) choice="${value,,}" ;; esac
+  fi
+  [[ ${HOME:-} != /* ]] || settings="$HOME/.config/pomar/settings.json"
+  if [[ -z $choice && -n $settings && -f $settings ]]; then
+    value=""
+    { read -r -d '' value <"$settings"; } 2>/dev/null || true
+    if [[ $value =~ \"language\"[[:space:]]*:[[:space:]]*\"([A-Za-z]*)\" ]]; then
+      value="${BASH_REMATCH[1],,}"
+      if [[ $value == en || $value == pt ]]; then choice="$value"; fi
+    fi
+  fi
+  if [[ -z $choice ]]; then
+    for value in "${LC_ALL:-}" "${LC_MESSAGES:-}" "${LANG:-}" "${LANGUAGE:-}"; do
+      if [[ ${value,,} == pt* ]]; then
+        choice=pt
+        break
+      fi
+    done
+  fi
+  POMAR_UI_LANG="${choice:-en}"
+  export POMAR_UI_LANG
+}
+
+# L "English" "Português": o texto no idioma escolhido.
+L() {
+  if [[ ${POMAR_UI_LANG:-en} == pt ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
+
+pomar_lang
+
+[[ -n ${HOME:-} && $HOME == /* ]] || {
+  echo "pomar: $(L "the HOME variable isn't set; can't continue." "a variável HOME não está definida; não dá para continuar.")" >&2
+  exit 1
+}
+
+POMAR_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# ------------------------------------------------------------------ caminhos
+# Sempre a partir do HOME, como o próprio Omarchy e o hypr/pomar.lua fazem.
+POMAR_DATA="$HOME/.local/share/pomar"
+POMAR_CURRENT="$POMAR_DATA/current"
+POMAR_RELEASES="$POMAR_DATA/releases"
+POMAR_SRC="$POMAR_DATA/src"
+POMAR_CONFIG="$HOME/.config/pomar"
+POMAR_SETTINGS="$POMAR_CONFIG/settings.json"
+POMAR_STATE="$HOME/.local/state/pomar"
+POMAR_BACKUPS="$POMAR_STATE/backup"
+POMAR_BAR_BACKUP="$POMAR_STATE/bar-backup.json"
+POMAR_PREVIOUS_THEME="$POMAR_STATE/previous-theme"
+# O bloco do hyprland.lua anota aqui o erro quando o pomar.lua não carrega.
+POMAR_HYPR_ERROR="$POMAR_STATE/hypr-erro"
+# Reinício do shell que ficou para depois (a tela estava bloqueada na atualização).
+POMAR_SHELL_RESTART="$POMAR_STATE/reiniciar-shell"
+POMAR_THEME_HOOK="$HOME/.config/omarchy/hooks/theme-set.d/50-pomarchy"
+POMAR_BIN_LINK="$HOME/.local/bin/pomar"
+OMARCHY_CONFIG="$HOME/.config/omarchy"
+OMARCHY_THEMES="$OMARCHY_CONFIG/themes"
+OMARCHY_PLUGINS="$OMARCHY_CONFIG/plugins"
+OMARCHY_SHELL_JSON="$OMARCHY_CONFIG/shell.json"
+OMARCHY_THEME_NAME="$HOME/.local/state/omarchy/current/theme.name"
+OMARCHY_DEFAULT_THEME="tokyo-night"
+HYPR_CONFIG="$HOME/.config/hypr/hyprland.lua"
+APPS_DIR="$HOME/.local/share/applications"
+ICON_THEME_DIR="$HOME/.local/share/icons/hicolor"
+ICONS_DIR="$ICON_THEME_DIR/scalable/apps"
+
+# ------------------------------------------------------------------ mensagens
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+  POMAR_C_OK=$'\e[32m' POMAR_C_WARN=$'\e[33m' POMAR_C_ERR=$'\e[31m'
+  POMAR_C_BOLD=$'\e[1m' POMAR_C_OFF=$'\e[0m'
+else
+  POMAR_C_OK="" POMAR_C_WARN="" POMAR_C_ERR="" POMAR_C_BOLD="" POMAR_C_OFF=""
+fi
+# O instalador recua as linhas de cada passo; sozinho, o pomar não recua.
+POMAR_INDENT="${POMAR_INDENT:-}"
+
+say() { printf '%s%s\n' "$POMAR_INDENT" "$*"; }
+ok() { printf '%s%s✓%s %s\n' "$POMAR_INDENT" "$POMAR_C_OK" "$POMAR_C_OFF" "$*"; }
+note() { printf '%s• %s\n' "$POMAR_INDENT" "$*"; }
+warn() { printf '%s%s!%s %s\n' "$POMAR_INDENT" "$POMAR_C_WARN" "$POMAR_C_OFF" "$*"; }
+bad() { printf '%s%s✗%s %s\n' "$POMAR_INDENT" "$POMAR_C_ERR" "$POMAR_C_OFF" "$*"; }
+fix() { printf '%s  %s %s\n' "$POMAR_INDENT" "$(L "How to fix:" "Como corrigir:")" "$*"; }
+die() {
+  printf '%s✗ %s%s\n' "$POMAR_C_ERR" "$*" "$POMAR_C_OFF" >&2
+  exit 1
+}
+
+# Caminho com ~ no lugar do HOME, para as mensagens.
+pretty() { printf '%s' "${1/#"$HOME"/\~}"; }
+
+theme_title() {
+  local name="$1" word out=""
+  for word in ${name//-/ }; do out+="${out:+ }${word^}"; done
+  printf '%s' "$out"
+}
+
+current_theme() {
+  local name=""
+  [[ -f $OMARCHY_THEME_NAME ]] && name=$(<"$OMARCHY_THEME_NAME")
+  printf '%s' "${name//[[:space:]]/}"
+}
+
+# Mostra as mensagens do kit em Python (uma por linha: tipo<TAB>texto) e guarda
+# o "status" que ele devolve em PY_STATUS.
+PY_STATUS=""
+relay() {
+  local kind text
+  while IFS=$'\t' read -r kind text || [[ -n $kind ]]; do
+    case "$kind" in
+      ok) ok "$text" ;;
+      note) note "$text" ;;
+      warn) warn "$text" ;;
+      err) bad "$text" ;;
+      status) PY_STATUS="$text" ;;
+      "") ;;
+      *) say "$kind${text:+ $text}" ;;
+    esac
+  done
+}
+
+kit() {
+  local out rc=0
+  out=$(pomar_py "$@") || rc=$?
+  PY_STATUS=""
+  relay <<<"$out"
+  return "$rc"
+}
+
+# --------------------------------------------------------- o que está rodando
+hypr_running() {
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] || return 1
+  command -v hyprctl >/dev/null 2>&1 || return 1
+  hyprctl version >/dev/null 2>&1
+}
+
+shell_running() {
+  command -v omarchy-shell >/dev/null 2>&1 || return 1
+  [[ $(omarchy-shell shell ping 2>/dev/null) == ok ]]
+}
+
+# Erros de configuração que o Hyprland mostra agora (linhas vazias fora).
+hypr_errors() {
+  hyprctl configerrors 2>/dev/null | sed '/^[[:space:]]*$/d' || true
+}
+
+# Pede ao shell para reler o shell.json (o que o próprio Omarchy faz depois de
+# editar o arquivo). Sem shell rodando, não faz nada.
+refresh_shell() {
+  command -v omarchy-shell >/dev/null 2>&1 || return 0
+  omarchy-shell -q shell reloadConfig >/dev/null 2>&1 || true
+}
+
+# Tenta um comando algumas vezes: wait_until TENTATIVAS INTERVALO comando...
+wait_until() {
+  local tries="$1" delay="$2" attempt
+  shift 2
+  for ((attempt = 0; attempt < tries; attempt++)); do
+    "$@" && return 0
+    sleep "$delay"
+  done
+  return 1
+}
+
+# ------------------------------------------- partes comuns de instalar/desfazer
+step() { printf '\n%s%s. %s%s\n' "$POMAR_C_BOLD" "$1" "$2" "$POMAR_C_OFF"; }
+
+# Falta algo para começar: explica e sai sem ter mexido em nada.
+need() {
+  printf '%s%s✗%s %s\n' "$POMAR_INDENT" "$POMAR_C_ERR" "$POMAR_C_OFF" "$*" >&2
+  printf '\n%s\n' "$(L "Nothing was changed." "Nada foi mudado.")" >&2
+  exit 1
+}
+
+# Um instalador ou desinstalador por vez.
+take_lock() {
+  mkdir -p "$POMAR_STATE"
+  command -v flock >/dev/null 2>&1 || return 0
+  exec 9>"$POMAR_STATE/.trava"
+  flock -n 9 || need "$(L "Another Pomarchy install or uninstall is running right now. Wait for it to finish." \
+    "Outra instalação ou desinstalação do Pomarchy está rodando agora. Espere ela terminar.")"
+}
+
+# O link aponta para dentro de ~/.local/share/pomar?
+points_into_pomar() {
+  local link="$1" target data
+  [[ -L $link ]] || return 1
+  target=$(readlink -- "$link")
+  [[ $target == /* ]] || target="$(dirname -- "$link")/$target"
+  target=$(realpath -ms -- "$target")
+  data=$(realpath -ms -- "$POMAR_DATA")
+  [[ $target == "$data" || $target == "$data"/* ]]
+}
+
+# Arquivos do lançador que são do Pomarchy (os de outra origem nunca são tocados).
+is_pomar_desktop() { [[ -f $1 && ! -L $1 ]] && grep -qx 'X-Pomar=true' -- "$1"; }
+is_pomar_icon() { [[ -f $1 && ! -L $1 ]] && grep -q 'omarchy-pomar' -- "$1"; }
+
+update_icon_cache() {
+  [[ -f $ICON_THEME_DIR/icon-theme.cache ]] || return 0
+  command -v gtk-update-icon-cache >/dev/null 2>&1 || return 0
+  gtk-update-icon-cache -q -t -f "$ICON_THEME_DIR" >/dev/null 2>&1 || true
+}
+
+# Cópias de segurança: uma pasta por execução, criada só quando precisa.
+BACKUP_DIR=""
+backup_dir() {
+  [[ -z $BACKUP_DIR ]] || return 0
+  BACKUP_DIR="$POMAR_BACKUPS/$(date +%Y%m%d-%H%M%S)"
+  [[ ! -e $BACKUP_DIR ]] || BACKUP_DIR="$BACKUP_DIR-$$"
+  mkdir -p "$BACKUP_DIR"
+}
+
+# Tira algo do caminho sem apagar: vai inteiro para a pasta de cópias, e fica
+# anotado (origem e cópia) para o desinstalador devolver ao lugar.
+backup_move() {
+  local path="$1" label="$2" dest
+  backup_dir
+  dest="$BACKUP_DIR/$label"
+  mkdir -p -- "$(dirname -- "$dest")"
+  mv -T -- "$path" "$dest"
+  pomar_py register-move "$path" "$dest"
+  note "$(L "What was at $(pretty "$path") was saved in $(pretty "$dest")" "O que existia em $(pretty "$path") foi guardado em $(pretty "$dest")")"
+}
+
+# Cópia do arquivo antes de mexer; vira cópia de segurança se ele mudar.
+snapshot() {
+  local file="$1" copy
+  [[ -f $file ]] || return 0
+  copy=$(mktemp "$POMAR_STATE/.copia.XXXXXX")
+  cat -- "$file" >"$copy"
+  printf '%s' "$copy"
+}
+
+keep_snapshot() {
+  local copy="$1" label="$2" file="$3"
+  [[ -n $copy && -f $copy ]] || return 0
+  if [[ -f $file ]] && [[ $(sha256sum <"$copy") == $(sha256sum <"$file") ]]; then
+    rm -f -- "$copy"
+    return 0
+  fi
+  backup_dir
+  mkdir -p -- "$(dirname -- "$BACKUP_DIR/$label")"
+  mv -f -- "$copy" "$BACKUP_DIR/$label"
+}
+
+# ------------------------------------------------------------ kit em Python
+# Tudo o que mexe em JSON ou no hyprland.lua passa por aqui: grava num arquivo
+# temporário ao lado e troca de uma vez; se o caminho é um link (dotfiles), grava
+# no arquivo de verdade e o link continua; e só grava quando algo mudou.
+pomar_py() {
+  python3 - "$@" <<'PY'
+import contextlib
+import copy
+import datetime
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HOME = Path(os.environ["HOME"])
+# Idioma das mensagens: o bin/pomar escolhe uma vez (pomar_lang) e passa em
+# POMAR_UI_LANG; sem ele, inglês. Só os textos para a pessoa mudam; os
+# "status" e as outras saídas lidas pelo bash são sempre os mesmos.
+UI_LANG = "pt" if os.environ.get("POMAR_UI_LANG") == "pt" else "en"
+
+
+def L(en, pt):
+    return pt if UI_LANG == "pt" else en
+
+
+OMARCHY_PATH = Path(os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy")
+SHELL_JSON = HOME / ".config/omarchy/shell.json"
+SHELL_DEFAULTS = OMARCHY_PATH / "config/omarchy/shell.json"
+STATE = HOME / ".local/state/pomar"
+BAR_BACKUP = STATE / "bar-backup.json"
+BAR_CHOICE = STATE / "barra"
+# Como estava o shell.json antes de o Pomarchy criá-lo ou enchê-lo (ausente ou
+# vazio), para o desinstalador devolver igual.
+SHELL_CREATED = STATE / "shell-json-criado"
+# O que o instalador tirou do caminho (origem -> cópia), para voltar no final.
+MOVES = STATE / "movidos.jsonl"
+SETTINGS = HOME / ".config/pomar/settings.json"
+HYPR_DIR = HOME / ".config/hypr"
+THEME_NAME = HOME / ".local/state/omarchy/current/theme.name"
+# Raiz de onde ler /etc (os testes apontam para uma pasta de mentira).
+SYSTEM_ROOT = Path(os.environ.get("POMAR_SYSTEM_ROOT") or "/")
+
+MENUBAR = "pomar.menubar"
+WORKSPACES = "omarchy.workspaces"
+CLOCK = "omarchy.clock"
+MAC_CLOCK_FORMAT = "ddd d MMM  HH:mm"
+# Versão das regras do `bar mac`. Até a 1 (versão d8ff529 e anteriores), as
+# mesas e os menus clonados saíam da barra; desde a 2, ficam.
+MAC_RULES = 2
+SECTIONS = ("left", "center", "right")
+MINIMIZED = "special:pomar-minimized"
+FALLBACK_SHELL = '{\n  "version": 1,\n  "bar": {\n    "layout": {\n      "left": [],\n      "center": [],\n      "right": []\n    }\n  },\n  "plugins": []\n}\n'
+# Nome das pastas de versão: sha do git (com -dirty) ou versão-data-hora.
+RELEASE_NAME = re.compile(r"(?:[0-9a-f]{7,40}(?:-dirty)?|[0-9][0-9A-Za-z.+~_]*-\d{8}-\d{6})")
+
+BLOCK_BEGIN = "-- >>> pomar >>>"
+BLOCK_END = "-- <<< pomar <<<"
+# O bloco carrega o pomar.lua sem deixar um erro dele derrubar o resto da
+# configuração; se não carregar, avisa na tela e anota o erro num arquivo que o
+# instalador e o `pomar doctor` leem. `do ... end` para as variáveis não vazarem.
+# Sempre em inglês, como o resto do hyprland.lua do Omarchy: é configuração, e um
+# texto só evita regravar o arquivo (e o `pomar doctor` acusar o bloco como
+# mudado) quando o idioma das mensagens muda.
+BLOCK = (
+    BLOCK_BEGIN,
+    "-- Pomarchy: Mac-style gestures, shortcuts and animations (active only with a Pomarchy theme).",
+    "do",
+    '  local home = os.getenv("HOME") or ""',
+    '  local ok, err = pcall(dofile, home .. "/.local/share/pomar/current/hypr/pomar.lua")',
+    '  local mark = home .. "/.local/state/pomar/hypr-erro"',
+    "  if ok then",
+    "    pcall(os.remove, mark)",
+    "  else",
+    '    pcall(function() hl.notification.create({ text = "Pomarchy OS failed to load: " .. tostring(err), timeout = 15000 }) end)',
+    '    pcall(function() local file = assert(io.open(mark, "w")); file:write(tostring(err), "\\n"); file:close() end)',
+    "  end",
+    "end",
+    BLOCK_END,
+)
+# Só uma linha inteira, e fora de comentário ou string longa, serve de âncora:
+# require("default.hypr.omarchy") ou require "default.hypr.omarchy", com ";" e
+# comentário de linha opcionais (o comentário já chega apagado pela máscara).
+REQUIRE_OMARCHY = re.compile(r"""[ \t]*require[ \t]*(?:\([ \t]*(["'])default\.hypr\.omarchy\1[ \t]*\)|(["'])default\.hypr\.omarchy\2)[ \t]*;?[ \t\x00]*""")
+BROKEN_BLOCK = L("The Pomarchy block in ~/.config/hypr/hyprland.lua is incomplete (the '-- >>> pomar >>>' or "
+                 "'-- <<< pomar <<<' line is missing). Delete what's left of it and run again.",
+                 "O bloco do Pomarchy no ~/.config/hypr/hyprland.lua está pela metade (falta a linha "
+                 "'-- >>> pomar >>>' ou '-- <<< pomar <<<'). Apague o que sobrou dele e rode de novo.")
+
+
+class Fail(Exception):
+    """Problema explicado para a pessoa: vira uma linha "err" e sai com 1."""
+
+
+def emit(kind, text=""):
+    print(f"{kind}\t{text}", flush=True)
+
+
+def pretty(path):
+    text, home = str(path), str(HOME)
+    if text == home or text.startswith(home + "/"):
+        return "~" + text[len(home):]
+    return text
+
+
+# ------------------------------------------------------------------ arquivos
+def current_umask():
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+def write_atomic(path, data):
+    target = Path(os.path.realpath(path))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o666 & ~current_umask()
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".pomar-tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
+
+
+def read_text(path):
+    # surrogateescape: qualquer byte volta idêntico na hora de gravar.
+    return Path(path).read_bytes().decode("utf-8", "surrogateescape")
+
+
+def write_text(path, text):
+    write_atomic(path, text.encode("utf-8", "surrogateescape"))
+
+
+def write_json(path, value):
+    write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+
+
+class JsonStyle:
+    """O jeito como o arquivo estava escrito (recuo, acentos escapados ou não,
+    quebra de linha no fim): ler e gravar de volta sem mudança dá o mesmo arquivo,
+    byte a byte, tanto para o padrão do Omarchy quanto para o que o shell grava."""
+
+    def __init__(self, text):
+        match = re.search(r"\n([ \t]+)\S", text)
+        if match is None:
+            self.indent = 2 if "\n" in text.strip() else None
+        elif match.group(1).startswith("\t"):
+            self.indent = "\t"
+        else:
+            self.indent = len(match.group(1))
+        self.ascii = text.isascii()
+        self.newline = text.endswith("\n")
+
+    def dump(self, value):
+        text = json.dumps(value, indent=self.indent, ensure_ascii=self.ascii)
+        return text + "\n" if self.newline else text
+
+
+# ---------------------------------------------------------------- shell.json
+def shell_defaults_text():
+    try:
+        return SHELL_DEFAULTS.read_text(encoding="utf-8")
+    except OSError:
+        return FALLBACK_SHELL
+
+
+def shell_defaults():
+    with contextlib.suppress(ValueError):
+        value = json.loads(shell_defaults_text())
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def shell_origin():
+    """Como estava o shell.json antes de o Pomarchy criá-lo ou enchê-lo: None
+    (o arquivo já era da pessoa), {"kind": "ausente"} ou {"kind": "vazio",
+    "text": ...}. A marca antiga, só com texto, quer dizer "ausente"."""
+    if not SHELL_CREATED.exists():
+        return None
+    try:
+        info = json.loads(SHELL_CREATED.read_text(encoding="utf-8"))
+    except ValueError:
+        info = None
+    if isinstance(info, dict) and info.get("kind") in ("ausente", "vazio"):
+        return info
+    return {"kind": "ausente"}
+
+
+def settle_shell_origin():
+    """Esquece a origem do shell.json (ausente ou vazio) só quando o arquivo no
+    disco já voltou a ela; até lá, cada nova gravação precisa saber o que era."""
+    origin = shell_origin()
+    if origin is None:
+        return
+    if origin["kind"] == "vazio":
+        back = SHELL_JSON.is_file() and SHELL_JSON.read_text(encoding="utf-8") == str(origin.get("text") or "")
+    else:
+        back = not SHELL_JSON.exists() or SHELL_JSON.is_symlink()
+    if back:
+        SHELL_CREATED.unlink()
+
+
+def cmd_shell_origin_note():
+    """Na largada da instalação: um shell.json ausente ou vazio fica anotado antes
+    de o shell (omarchy plugin enable) enchê-lo com o que tem na memória."""
+    if shell_origin() is not None or (SHELL_JSON.is_file() and SHELL_JSON.read_text(encoding="utf-8").strip()):
+        return
+    STATE.mkdir(parents=True, exist_ok=True)
+    if SHELL_JSON.is_file():
+        write_json(SHELL_CREATED, {"kind": "vazio", "text": SHELL_JSON.read_text(encoding="utf-8")})
+    elif not SHELL_JSON.exists() and not SHELL_JSON.is_symlink():
+        write_json(SHELL_CREATED, {"kind": "ausente"})
+
+
+class ShellFile:
+    """O shell.json como o Omarchy o lê: o da pessoa, se tem conteúdo; senão
+    (ausente ou vazio), o padrão do Omarchy. Guarda como o arquivo estava, para
+    gravar só o que mudou e desfazer exatamente."""
+
+    def __init__(self):
+        self.kind, self.raw = "absent", None
+        if SHELL_JSON.is_file():
+            self.raw = read_text(SHELL_JSON)
+            self.kind = "file" if self.raw.strip() else "empty"
+        source = self.raw if self.kind == "file" else shell_defaults_text()
+        try:
+            self.data = json.loads(source)
+        except ValueError as error:
+            where = pretty(SHELL_JSON) if self.kind == "file" else pretty(SHELL_DEFAULTS)
+            line = getattr(error, "lineno", "?")
+            raise Fail(L(f"The file {where} has a typo (line {line}); Pomarchy didn't touch it. "
+                         "Fix the file and run again.",
+                         f"O arquivo {where} tem um erro de digitação (linha {line}); "
+                         "o Pomarchy não mexeu nele. Conserte o arquivo e rode de novo."))
+        if not isinstance(self.data, dict):
+            raise Fail(L(f"The file {pretty(SHELL_JSON)} isn't in the expected format; Pomarchy didn't touch it.",
+                         f"O arquivo {pretty(SHELL_JSON)} não tem o formato esperado; o Pomarchy não mexeu nele."))
+        self.style = JsonStyle(source)
+
+    def save(self):
+        """Grava só se mudou. Se o arquivo foi criado (ou enchido) pelo Pomarchy e
+        voltou a dizer o mesmo que o padrão do Omarchy, volta a ser o que era: sem
+        arquivo, ou vazio como estava. Um shell.json que é link nunca é apagado."""
+        defaults = shell_defaults()
+        origin = shell_origin()
+        if origin is not None and defaults is not None and self.data == defaults:
+            # A marca de origem fica até a volta ser conferida (settle_shell_origin):
+            # se o shell gravar por cima, a próxima tentativa ainda sabe o que era.
+            if origin["kind"] == "vazio":
+                text = str(origin.get("text") or "")
+                if self.kind == "empty" and self.raw == text:
+                    return False
+                write_text(SHELL_JSON, text)
+                return True
+            if SHELL_JSON.is_symlink():
+                # Link de dotfiles: fica, com o conteúdo padrão, que para o
+                # Omarchy é o mesmo que não ter arquivo.
+                text = self.style.dump(self.data)
+                if self.kind == "file" and self.raw == text:
+                    return False
+                write_text(SHELL_JSON, text)
+                return True
+            if SHELL_JSON.is_file():
+                SHELL_JSON.unlink()
+                return True
+            return False
+        text = self.style.dump(self.data)
+        if self.kind == "file" and text == self.raw:
+            return False
+        if self.kind != "file":
+            if defaults is not None and self.data == defaults:
+                return False
+            if origin is None:
+                STATE.mkdir(parents=True, exist_ok=True)
+                write_json(SHELL_CREATED, {"kind": "vazio", "text": self.raw} if self.kind == "empty"
+                           else {"kind": "ausente"})
+        write_text(SHELL_JSON, text)
+        return True
+
+
+def entry_id(entry):
+    if isinstance(entry, dict):
+        return str(entry.get("id") or "")
+    return "" if entry is None else str(entry)
+
+
+def as_object(entry):
+    return entry if isinstance(entry, dict) else {"id": entry_id(entry)}
+
+
+def same_entry(a, b):
+    return as_object(a) == as_object(b)
+
+
+def layout_of(bar):
+    layout = bar.get("layout") if isinstance(bar, dict) else None
+    layout = layout if isinstance(layout, dict) else {}
+    sections = {name: list(layout[name]) if isinstance(layout.get(name), list) else [] for name in SECTIONS}
+    return sections, layout
+
+
+def menu_widget(section, wid):
+    return wid == "omarchy.menu" or (section == "left" and wid.endswith(".menu"))
+
+
+def mac_bar(bar):
+    """Barra de menus do Mac com o melhor do Omarchy: à esquerda o menu do
+    Pomarchy e as mesas do Omarchy; à direita, o que estava no centro e na
+    direita (sem repetir) e o relógio por último. Só sai da barra o logo/menu
+    do Omarchy (o menu do Pomarchy faz o papel dele e abre o menu do Omarchy);
+    cada item leva junto as suas opções."""
+    bar = copy.deepcopy(bar) if isinstance(bar, dict) else {}
+    sections, layout = layout_of(bar)
+    everything = [entry for name in SECTIONS for entry in sections[name]]
+    menubar = next((e for e in everything if entry_id(e) == MENUBAR), None) or {"id": MENUBAR}
+    clock = next((e for name in ("center", "right", "left") for e in sections[name] if entry_id(e) == CLOCK), None)
+
+    def leaves(section, entry):
+        wid = entry_id(entry)
+        return wid in ("omarchy.menu", WORKSPACES, MENUBAR) or menu_widget(section, wid)
+
+    right = []
+    for name in SECTIONS:
+        for entry in sections[name]:
+            if entry is clock or leaves(name, entry) or any(same_entry(entry, kept) for kept in right):
+                continue
+            right.append(entry)
+    clock = copy.deepcopy(as_object(clock)) if clock is not None else {"id": CLOCK}
+    clock["format"] = MAC_CLOCK_FORMAT
+    right.append(clock)
+    layout = dict(layout)
+    workspaces = next((e for e in everything if entry_id(e) == WORKSPACES), None)
+    layout["left"] = [menubar] + ([copy.deepcopy(workspaces)] if workspaces is not None else [])
+    layout["center"] = []
+    layout["right"] = right
+    bar["layout"] = layout
+    return bar
+
+
+def restore_bar(current, saved):
+    """A barra guardada, mais (à direita) o que a pessoa pôs na barra depois.
+    O que o próprio `bar mac` acrescentou (o menu do Pomarchy e, se a barra não
+    tinha, o relógio) não conta como coisa nova."""
+    restored = copy.deepcopy(saved) if isinstance(saved, dict) else {}
+    saved_sections, _ = layout_of(restored)
+    known = {entry_id(e) for name in SECTIONS for e in saved_sections[name]}
+    added_by_mac = {MENUBAR, CLOCK}
+    current_sections, _ = layout_of(current)
+    extras = []
+    for name in SECTIONS:
+        for entry in current_sections[name]:
+            wid = entry_id(entry)
+            if wid in added_by_mac or wid in known or any(same_entry(entry, kept) for kept in extras):
+                continue
+            extras.append(copy.deepcopy(entry))
+    if extras:
+        layout = restored.get("layout")
+        if not isinstance(layout, dict):
+            layout = {}
+            restored["layout"] = layout
+        right = layout.get("right") if isinstance(layout.get("right"), list) else []
+        layout["right"] = right + extras
+    return restored, extras
+
+
+def read_bar_backup():
+    try:
+        backup = json.loads(BAR_BACKUP.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        backup = None
+    if not isinstance(backup, dict) or not isinstance(backup.get("bar"), dict):
+        raise Fail(L(f"The bar copy in {pretty(BAR_BACKUP)} is damaged; Pomarchy didn't change anything.",
+                     f"A cópia da barra em {pretty(BAR_BACKUP)} está danificada; o Pomarchy não mexeu em nada."))
+    return backup
+
+
+def keep_enabled(data, bar):
+    """Plugin de terceiros que só estava ligado por estar na barra (ex.: um menu
+    do Omarchy clonado) não pode desligar ao sair dela: sem ele, SUPER+ESPAÇO,
+    SUPER+K e a gravação de tela param. Vai para plugins[], como o próprio shell
+    grava. Devolve os ids acrescentados, para o `bar restore` tirar depois."""
+    sections, _ = layout_of(bar)
+    plugins = data.get("plugins") if isinstance(data.get("plugins"), list) else []
+    listed = {entry_id(e) for e in plugins}
+    added = []
+    for name in SECTIONS:
+        for entry in sections[name]:
+            wid = entry_id(entry)
+            if menu_widget(name, wid) and not wid.startswith("omarchy.") and wid not in listed:
+                plugins.append({"id": wid})
+                listed.add(wid)
+                added.append(wid)
+    if added:
+        data["plugins"] = plugins
+    return added
+
+
+def bring_back_workspaces(data, saved):
+    """As mesas do Omarchy: se a barra original tinha e a de agora perdeu
+    (versão antiga do `bar mac`), voltam; o mac_bar as põe depois do menu."""
+    bar = data.get("bar")
+    layout = bar.get("layout") if isinstance(bar, dict) else None
+    if not isinstance(layout, dict) or in_layout(data, WORKSPACES):
+        return
+    saved_sections, _ = layout_of(saved)
+    entry = next((e for name in SECTIONS for e in saved_sections[name] if entry_id(e) == WORKSPACES), None)
+    if entry is not None:
+        left = layout.get("left") if isinstance(layout.get("left"), list) else []
+        layout["left"] = left + [copy.deepcopy(entry)]
+
+
+def cmd_bar_mac():
+    shell = ShellFile()
+    data = shell.data
+    added = keep_enabled(data, data.get("bar"))
+    backup = None  # cópia existente que precisa ser atualizada
+    if not BAR_BACKUP.exists():
+        bar = data.get("bar")
+        write_json(BAR_BACKUP, {
+            "version": 1,
+            "rules": MAC_RULES,
+            "savedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+            "hadBar": "bar" in data,
+            "bar": bar if isinstance(bar, dict) else {},
+            "addedPlugins": added,
+        })
+    else:
+        saved = read_bar_backup()
+        migrate = saved.get("rules", 1) < MAC_RULES
+        if migrate:
+            # Barra no estilo Mac feita por uma versão anterior: o que as regras
+            # de hoje mantêm (mesas e menus clonados da barra original) volta,
+            # uma vez só; depois disso vale o que a pessoa mudar.
+            added += keep_enabled(data, saved["bar"])
+            bring_back_workspaces(data, saved["bar"])
+        if added:
+            # Antes da barra: o que entrar em plugins[] fica anotado para sair
+            # no restore mesmo que a gravação seguinte falhe.
+            saved["addedPlugins"] = sorted(set(saved.get("addedPlugins") or []) | set(added))
+            write_json(BAR_BACKUP, saved)
+        if migrate:
+            backup = saved
+    data["bar"] = mac_bar(data.get("bar"))
+    changed = shell.save()
+    if backup is not None:
+        # Só depois da barra gravada: se a gravação falhar, a migração roda de novo.
+        backup["rules"] = MAC_RULES
+        write_json(BAR_BACKUP, backup)
+    emit("ok", L("Mac-style menu bar: Pomarchy menu on the left, icons and clock on the right",
+                 "Barra no estilo Mac: menu do Pomarchy à esquerda, ícones e relógio à direita"))
+    emit("status", "changed" if changed else "unchanged")
+
+
+def restore_target(data, backup):
+    """O shell.json com a barra guardada de volta e sem os plugins que o
+    `bar mac` pôs em plugins[] (voltam a viver só na barra)."""
+    data = copy.deepcopy(data)
+    restored, extras = restore_bar(data.get("bar"), backup["bar"])
+    if backup.get("hadBar", True) or extras:
+        data["bar"] = restored
+    else:
+        data.pop("bar", None)
+    added = set(backup.get("addedPlugins") or [])
+    if added and isinstance(data.get("plugins"), list):
+        data["plugins"] = [e for e in data["plugins"] if entry_id(e) not in added]
+    return data, extras
+
+
+# A volta da barra é feita em três partes, porque o shell do Omarchy, se estiver
+# rodando, pode gravar por cima o que tem na memória: grava, confere no disco
+# depois de o shell reler, e só então apaga a cópia guardada.
+def cmd_bar_restore_write():
+    if not BAR_BACKUP.exists():
+        emit("ok", L("The bar is already the Omarchy one (there was nothing saved to bring back)",
+                     "A barra já é a do Omarchy (não havia nada guardado para voltar)"))
+        emit("status", "no-backup")
+        return
+    backup = read_bar_backup()
+    shell = ShellFile()
+    shell.data, _ = restore_target(shell.data, backup)
+    emit("status", "changed" if shell.save() else "unchanged")
+
+
+def cmd_bar_restore_check():
+    if not BAR_BACKUP.exists():
+        return
+    backup = read_bar_backup()
+    shell = ShellFile()
+    target, _ = restore_target(shell.data, backup)
+    sys.exit(0 if target == shell.data else 1)
+
+
+def cmd_bar_restore_finish():
+    if not BAR_BACKUP.exists():
+        settle_shell_origin()
+        return
+    backup = read_bar_backup()
+    shell = ShellFile()
+    target, extras = restore_target(shell.data, backup)
+    if target != shell.data:
+        sys.exit(1)  # o shell gravou a barra de antes por cima de novo: a cópia fica
+    # Guardada no backup, não apagada: se o shell regravar a barra do Mac logo
+    # depois, a barra original ainda está lá para voltar à mão.
+    kept = STATE / "backup" / ("barra-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".json")
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(BAR_BACKUP, kept)
+    settle_shell_origin()
+    emit("ok", L("The Omarchy bar is back, as it was before", "Barra do Omarchy de volta, como era antes"))
+    if extras:
+        emit("note", L("What you added to the bar since then stays on the right: ",
+                       "O que você pôs na barra depois ficou à direita: ") + ", ".join(entry_id(e) for e in extras))
+
+
+def cmd_bar_status():
+    data = ShellFile().data
+    sections, _ = layout_of(data.get("bar"))
+    has_menubar = any(entry_id(e) == MENUBAR for e in sections["left"])
+    if BAR_BACKUP.exists() and has_menubar:
+        emit("ok", L("Mac-style menu bar (from Pomarchy). To go back to the Omarchy bar: pomar bar restore",
+                     "Barra no estilo Mac (do Pomarchy). Para voltar à barra do Omarchy: pomar bar restore"))
+        emit("status", "mac")
+    elif BAR_BACKUP.exists():
+        emit("note", L("The original bar is saved, but the bar was changed afterwards. "
+                       "Mac style: pomar bar mac. Original bar: pomar bar restore",
+                       "A barra original está guardada, mas a barra foi mudada depois. "
+                       "Estilo Mac: pomar bar mac. Barra original: pomar bar restore"))
+        emit("status", "changed-after")
+    elif has_menubar:
+        emit("note", L("The bar has the Pomarchy menu, but no copy of the original bar is saved",
+                       "A barra tem o menu do Pomarchy, mas não há cópia da barra original guardada"))
+        emit("status", "mac-without-backup")
+    else:
+        emit("ok", L("Omarchy bar (the original). For the Mac-style menu bar: pomar bar mac",
+                     "Barra do Omarchy (a original). Para a barra no estilo Mac: pomar bar mac"))
+        emit("status", "original")
+
+
+def in_layout(data, wid):
+    sections, _ = layout_of(data.get("bar"))
+    return any(entry_id(e) == wid for name in SECTIONS for e in sections[name])
+
+
+def cmd_plugins_on(ids):
+    """Liga peças sem o shell: é o que o próprio shell grava para um plugin de
+    terceiros que não é item da barra, {"id": ...} em plugins[]."""
+    shell = ShellFile()
+    data = shell.data
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list):
+        plugins = []
+        data["plugins"] = plugins
+    for wid in ids:
+        if not any(entry_id(e) == wid for e in plugins) and not in_layout(data, wid):
+            plugins.append({"id": wid})
+    emit("status", "changed" if shell.save() else "unchanged")
+
+
+def cmd_plugins_off(ids):
+    """Tira do shell.json (plugins[] e barra) exatamente estes ids: os das
+    peças da versão instalada, nunca "qualquer coisa que comece com pomar."."""
+    gone = set(ids)
+    shell = ShellFile()
+    data = shell.data
+    if isinstance(data.get("plugins"), list):
+        data["plugins"] = [e for e in data["plugins"] if entry_id(e) not in gone]
+    bar = data.get("bar")
+    layout = bar.get("layout") if isinstance(bar, dict) else None
+    if isinstance(layout, dict):
+        for name in SECTIONS:
+            if isinstance(layout.get(name), list):
+                layout[name] = [e for e in layout[name] if entry_id(e) not in gone]
+    emit("status", "changed" if shell.save() else "unchanged")
+
+
+def cmd_plugins_check(mode, ids):
+    """Sai com 0 quando o shell.json no disco já tem (on) ou já não tem (off)
+    cada uma das peças; senão imprime as que faltam e sai com 1."""
+    try:
+        data = ShellFile().data
+        plugins = data.get("plugins") if isinstance(data.get("plugins"), list) else []
+    except Fail:
+        plugins = []
+    listed = {entry_id(e) for e in plugins}
+    pending = [wid for wid in ids if (wid in listed) != (mode == "on")]
+    if pending:
+        print(" ".join(pending))
+        sys.exit(1)
+
+
+# ------------------------------------------------------------------- ajustes
+LONG_BRACKET = re.compile(r"\[(=*)\[")
+GESTURE_CALL = re.compile(r"\bhl\s*\.\s*gesture\s*([({])")
+FINGERS = re.compile(r"\bfingers\s*=\s*(\d+)")
+DIRECTION = re.compile(r"""\bdirection\s*=\s*["']([A-Za-z_]+)["']""")
+AXES = {
+    "horizontal": ("spaces",), "left": ("spaces",), "right": ("spaces",),
+    "vertical": ("mission",), "up": ("mission",), "down": ("mission",),
+    "swipe": ("spaces", "mission"),
+    "pinch": ("pinch",), "pinchin": ("pinch",), "pinchout": ("pinch",),
+}
+
+
+def skip_string(code, start):
+    quote, index, size = code[start], start + 1, len(code)
+    while index < size and code[index] not in (quote, "\n"):
+        index += 2 if code[index] == "\\" else 1
+    return index + 1
+
+
+def lua_code(text):
+    """O Lua sem comentários (-- e --[[ ]]), com as strings intactas: o modelo
+    do Omarchy traz os gestos de 3 dedos comentados, e esses não contam."""
+    out, index, size = [], 0, len(text)
+    while index < size:
+        if text.startswith("--", index):
+            long = LONG_BRACKET.match(text, index + 2)
+            if long:
+                end = text.find("]" + long.group(1) + "]", long.end())
+                index = size if end < 0 else end + len(long.group(1)) + 2
+                out.append(" ")
+            else:
+                end = text.find("\n", index)
+                index = size if end < 0 else end
+            continue
+        char = text[index]
+        if char in "\"'":
+            end = skip_string(text, index)
+            out.append(text[index:end])
+            index = end
+            continue
+        if char == "[":
+            long = LONG_BRACKET.match(text, index)
+            if long:
+                end = text.find("]" + long.group(1) + "]", long.end())
+                end = size if end < 0 else end + len(long.group(1)) + 2
+                out.append(text[index:end])
+                index = end
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def table_fields(code, start):
+    """Só o primeiro nível da tabela que começa em code[start]: o "direction"
+    que vale é o do gesto, não o de uma função dentro dele."""
+    depth, out, index, size = 0, [], start, len(code)
+    while index < size:
+        char = code[index]
+        if char in "\"'":
+            end = skip_string(code, index)
+            if depth == 1:
+                out.append(code[index:end])
+            index = end
+            continue
+        if char in "({[":
+            depth += 1
+        elif char in ")}]":
+            depth -= 1
+            if depth == 0:
+                break
+        elif depth == 1:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def gestures_in_use():
+    used = {"spaces": set(), "mission": set(), "pinch": set()}
+    for path in sorted(HYPR_DIR.glob("*.lua")):
+        try:
+            code = lua_code(read_text(path))
+        except OSError:
+            continue
+        for match in GESTURE_CALL.finditer(code):
+            start = match.start(1)
+            if code[start] == "(":
+                start += 1
+                while start < len(code) and code[start].isspace():
+                    start += 1
+                if start >= len(code) or code[start] != "{":
+                    continue
+            fields = table_fields(code, start)
+            fingers, direction = FINGERS.search(fields), DIRECTION.search(fields)
+            if fingers and direction:
+                for axis in AXES.get(direction.group(1).lower(), ()):
+                    used[axis].add(int(fingers.group(1)))
+    return used
+
+
+def spoken(numbers):
+    items = [str(n) for n in sorted(numbers)]
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + L(" and ", " e ") + items[-1]
+
+
+GESTURE_TEXT = {
+    "spaces": (L("sideways", "para os lados"), L("switch desktops", "trocar de mesa"), "spacesFingers"),
+    "mission": (L("up or down", "para cima ou para baixo"), L("open Mission Control", "o Mission Control"),
+                "missionFingers"),
+}
+
+
+KB_LAYOUT = re.compile(r"""\bkb_layout\s*=\s*["']([^"']*)["']""")
+XKB_LAYOUT = re.compile(r'XkbLayout"\s+"([^"]*)"')
+PORTUGUESE_LAYOUTS = ("br", "pt")
+
+
+def portuguese_layout(value):
+    return any(part.strip().split("(")[0] in PORTUGUESE_LAYOUTS for part in value.split(","))
+
+
+def detect_language():
+    """"pt" quando o sistema fala português ou o teclado é brasileiro (ou
+    português); senão "auto", que segue o LANG. Lê os mesmos arquivos que o
+    localectl mantém, sem precisar do D-Bus."""
+    for key in ("LANG", "LC_ALL", "LC_MESSAGES"):
+        if os.environ.get(key, "").lower().startswith("pt"):
+            return "pt"
+    with contextlib.suppress(OSError):
+        for line in (SYSTEM_ROOT / "etc/vconsole.conf").read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "KEYMAP" and value.strip().strip("\"'").lower().startswith(PORTUGUESE_LAYOUTS):
+                return "pt"
+    with contextlib.suppress(OSError):
+        text = (SYSTEM_ROOT / "etc/X11/xorg.conf.d/00-keyboard.conf").read_text(encoding="utf-8")
+        if any(portuguese_layout(m.group(1).lower()) for m in XKB_LAYOUT.finditer(text)):
+            return "pt"
+    for path in sorted(HYPR_DIR.glob("*.lua")):
+        with contextlib.suppress(OSError):
+            if any(portuguese_layout(m.group(1).lower()) for m in KB_LAYOUT.finditer(lua_code(read_text(path)))):
+                return "pt"
+    return "auto"
+
+
+def cmd_settings_init():
+    used = gestures_in_use()
+    if SETTINGS.exists():
+        settings_existing(used)
+        return
+    gestures, notes = {}, []
+    for axis, (where, what, key) in GESTURE_TEXT.items():
+        free = next((n for n in (3, 4, 5) if n not in used[axis]), None)
+        if free is None:
+            notes.append(("warn", L(f"You already swipe {where} with 3, 4 and 5 fingers in other gestures; "
+                                    f"the Pomarchy gesture to {what} will conflict with them.",
+                                    f"Você já usa 3, 4 e 5 dedos {where} em outros gestos; "
+                                    f"o gesto do Pomarchy para {what} vai disputar com eles.")))
+        elif free != 3:
+            gestures[key] = free
+            notes.append(("note", L(f"You already swipe {where} with {spoken(used[axis])} fingers in another gesture; "
+                                    f"Pomarchy will use {free} to {what}.",
+                                    f"Você já usa {spoken(used[axis])} dedos {where} em outro gesto; "
+                                    f"o Pomarchy vai usar {free} para {what}.")))
+    if 4 in used["pinch"]:
+        gestures["launchpadPinch"] = False
+        notes.append(("note", L("You already use a 4-finger pinch in another gesture; the Launchpad pinch stays "
+                                "off (open Launchpad from the Dock or with SUPER+ALT+SPACE).",
+                                "Você já usa a pinça com 4 dedos em outro gesto; a pinça do Launchpad fica "
+                                "desligada (abra o Launchpad pelo Dock ou com SUPER+ALT+ESPAÇO).")))
+    language = detect_language()
+    settings = {"version": 1, "language": language}
+    if gestures:
+        settings["gestures"] = gestures
+    write_json(SETTINGS, settings)
+    emit("ok", L(f"Settings created in {pretty(SETTINGS)}", f"Ajustes criados em {pretty(SETTINGS)}"))
+    if language == "pt":
+        emit("ok", L("Language: Portuguese (this computer uses Portuguese or a Brazilian keyboard)",
+                     "Idioma: português (o computador está em português ou com teclado brasileiro)"))
+    for kind, text in notes:
+        emit(kind, text)
+    emit("status", "created")
+
+
+def settings_existing(used):
+    try:
+        current = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        assert isinstance(current, dict)
+    except (OSError, ValueError, AssertionError):
+        emit("warn", L(f"The file {pretty(SETTINGS)} has a typo; Pomarchy uses the default settings "
+                       "until it's fixed (or deleted).",
+                       f"O arquivo {pretty(SETTINGS)} tem um erro de digitação; o Pomarchy usa os ajustes "
+                       "padrão até ele ser consertado (ou apagado)."))
+        emit("status", "invalid")
+        return
+    emit("ok", L(f"Settings kept in {pretty(SETTINGS)}", f"Ajustes mantidos em {pretty(SETTINGS)}"))
+    gestures = current.get("gestures") if isinstance(current.get("gestures"), dict) else {}
+    if gestures.get("enabled", True) is not False:
+        for axis, (where, what, key) in GESTURE_TEXT.items():
+            fingers = gestures.get(key, 3)
+            if isinstance(fingers, int) and fingers in used[axis]:
+                emit("warn", L(f"You swipe {where} with {fingers} fingers in another gesture, and Pomarchy uses "
+                               f"that too to {what}; change it in Pomarchy Settings > Gestures.",
+                               f"Você usa {fingers} dedos {where} em outro gesto e o Pomarchy também usa para "
+                               f"{what}; mude em Ajustes do Pomarchy > Gestos."))
+    emit("status", "kept")
+
+
+def cmd_settings_summary():
+    """Dedos que valem agora: mesas, Mission Control, pinça (1/0)."""
+    gestures = {}
+    with contextlib.suppress(OSError, ValueError):
+        current = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        if isinstance(current, dict) and isinstance(current.get("gestures"), dict):
+            gestures = current["gestures"]
+
+    def fingers(key):
+        value = gestures.get(key, 3)
+        return value if isinstance(value, int) and 3 <= value <= 5 else 3
+
+    pinch = gestures.get("launchpadPinch", True) is not False
+    print(f"{fingers('spacesFingers')}\t{fingers('missionFingers')}\t{1 if pinch else 0}")
+
+
+# -------------------------------------------------------------- hyprland.lua
+def split_lines(text):
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def find_blocks(lines):
+    blocks, start = [], None
+    for index, line in enumerate(lines):
+        marker = line.strip()
+        if marker == BLOCK_BEGIN:
+            if start is not None:
+                raise Fail(BROKEN_BLOCK)
+            start = index
+        elif marker == BLOCK_END:
+            if start is None:
+                raise Fail(BROKEN_BLOCK)
+            blocks.append((start, index))
+            start = None
+    if start is not None:
+        raise Fail(BROKEN_BLOCK)
+    return blocks
+
+
+def remove_blocks(text):
+    """Tira o bloco exatamente como insert_block o pôs (inclusive a quebra de
+    linha que ele acrescentou num arquivo que terminava sem uma)."""
+    lines = split_lines(text)
+    for begin, end in reversed(find_blocks(lines)):
+        at_end_without_newline = end == len(lines) - 1 and not lines[end].endswith("\n")
+        del lines[begin:end + 1]
+        if at_end_without_newline and begin > 0 and lines[begin - 1].endswith("\n"):
+            lines[begin - 1] = lines[begin - 1][:-1]
+    return "".join(lines)
+
+
+def mask_lua(text):
+    """O texto com comentários e strings longas trocados por \x00, do mesmo
+    tamanho e com as quebras de linha no lugar: o que sobra visível numa linha é
+    código de verdade. Devolve também as quebras de linha que ficam dentro de um
+    comentário ou string longa (a linha continua dentro dele)."""
+    out, inside, index, size = [], set(), 0, len(text)
+
+    def blank(start, stop, long):
+        for position in range(start, stop):
+            if text[position] == "\n":
+                out.append("\n")
+                if long:
+                    inside.add(position)
+            else:
+                out.append("\x00")
+
+    while index < size:
+        if text.startswith("--", index):
+            long = LONG_BRACKET.match(text, index + 2)
+            if long:
+                end = text.find("]" + long.group(1) + "]", long.end())
+                stop = size if end < 0 else end + len(long.group(1)) + 2
+            else:
+                end = text.find("\n", index)
+                stop = size if end < 0 else end
+            blank(index, stop, bool(long))
+            index = stop
+            continue
+        char = text[index]
+        if char in "\"'":
+            end = min(skip_string(text, index), size)
+            out.append(text[index:end])
+            index = end
+            continue
+        if char == "[":
+            long = LONG_BRACKET.match(text, index)
+            if long:
+                end = text.find("]" + long.group(1) + "]", long.end())
+                stop = size if end < 0 else end + len(long.group(1)) + 2
+                blank(index, stop, True)
+                index = stop
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out), inside
+
+
+def find_anchor(text):
+    """A linha do require("default.hypr.omarchy"): inteira, fora de comentário
+    ou string longa, e sem nada longo aberto no fim dela."""
+    masked, inside = mask_lua(text)
+    offset = 0
+    for index, line in enumerate(split_lines(masked)):
+        newline = offset + len(line) - 1 if line.endswith("\n") else None
+        if REQUIRE_OMARCHY.fullmatch(line.rstrip("\r\n")) and newline not in inside:
+            return index
+        offset += len(line)
+    return None
+
+
+def insert_block(text):
+    """Logo depois de require("default.hypr.omarchy") (os padrões do Omarchy),
+    antes dos arquivos da pessoa, que continuam valendo por cima; sem essa linha,
+    no fim do arquivo."""
+    lines = split_lines(text)
+    block = [line + "\n" for line in BLOCK]
+    anchor = find_anchor(text)
+    if anchor is None:
+        anchor = len(lines) - 1
+        if not lines:
+            return "".join(block)
+    if not lines[anchor].endswith("\n"):
+        lines[anchor] += "\n"
+        block[-1] = block[-1][:-1]
+    lines[anchor + 1:anchor + 1] = block
+    return "".join(lines)
+
+
+def lua_problem(text, where):
+    """None se o Lua lê o texto sem erro de sintaxe; senão, a mensagem do luac
+    (o mesmo Lua do Hyprland). Sem luac na máquina, não dá para conferir."""
+    compiler = next((found for found in map(shutil.which, ("luac", "luac5.5", "luac5.4")) if found), None)
+    if compiler is None:
+        return None
+    result = subprocess.run([compiler, "-p", "-"], input=text.encode("utf-8", "surrogateescape"),
+                            capture_output=True, cwd=tempfile.gettempdir())
+    if result.returncode == 0:
+        return None
+    message = (result.stderr or result.stdout).decode("utf-8", "replace").strip().splitlines()
+    message = message[0] if message else L("syntax error", "erro de sintaxe")
+    message = re.sub(r"^\S*luac[0-9.]*:\s*", "", message)
+    return re.sub(r"^stdin:", L(f"{where}, line ", f"{where}, linha "), message)
+
+
+def cmd_hypr_add(path):
+    target = Path(path)
+    where = pretty(target)
+    if not target.is_file():
+        raise Fail(L(f"Couldn't find {where}.", f"Não achei {where}."))
+    original = read_text(target)
+    updated = insert_block(remove_blocks(original))
+    if updated == original:
+        emit("status", "unchanged")
+        return
+    problem = lua_problem(updated, where)
+    if problem is not None:
+        before = lua_problem(original, where)
+        if before is not None:
+            raise Fail(L(f"{where} already has a Lua error ({before}); Pomarchy didn't touch it. "
+                         "Fix the file and run the installer again.",
+                         f"O {where} já tem um erro de Lua ({before}); o Pomarchy não mexeu nele. "
+                         "Conserte o arquivo e rode o instalador de novo."))
+        raise Fail(L(f"With the Pomarchy block, {where} would have a Lua error ({problem}); "
+                     "Pomarchy didn't touch it.",
+                     f"Com o bloco do Pomarchy, o {where} ficaria com erro de Lua ({problem}); "
+                     "o Pomarchy não mexeu nele."))
+    write_text(target, updated)
+    emit("status", "changed")
+
+
+def cmd_hypr_remove(path):
+    target = Path(path)
+    if not target.is_file():
+        emit("status", "unchanged")
+        return
+    original = read_text(target)
+    updated = remove_blocks(original)
+    if updated == original:
+        emit("status", "unchanged")
+        return
+    write_text(target, updated)
+    emit("status", "changed")
+
+
+def cmd_hypr_check(path):
+    target = Path(path)
+    if not target.is_file():
+        emit("status", "missing-file")
+        return
+    text = read_text(target)
+    lines = split_lines(text)
+    try:
+        blocks = find_blocks(lines)
+    except Fail:
+        emit("status", "broken")
+        return
+    if not blocks:
+        emit("status", "absent")
+    elif len(blocks) > 1:
+        emit("status", "repeated")
+    else:
+        begin, end = blocks[0]
+        anchor = find_anchor(text)
+        if [line.strip() for line in lines[begin:end + 1]] != [line.strip() for line in BLOCK]:
+            emit("status", "different")
+        elif anchor is not None and begin != anchor + 1:
+            emit("status", "misplaced")
+        else:
+            emit("status", "ok")
+
+
+# ------------------------------------------------------------------ versões
+def tree(root):
+    items = {}
+    for folder, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in dirs + sorted(files):
+            path = os.path.join(folder, name)
+            relative = os.path.relpath(path, root)
+            if os.path.islink(path):
+                items[relative] = ("link", os.readlink(path))
+            elif os.path.isdir(path):
+                items[relative] = ("dir",)
+            else:
+                with open(path, "rb") as handle:
+                    digest = hashlib.sha256(handle.read()).hexdigest()
+                items[relative] = ("file", bool(os.stat(path).st_mode & 0o111), digest)
+    return items
+
+
+def cmd_same_tree(first, second):
+    sys.exit(0 if tree(first) == tree(second) else 1)
+
+
+def cmd_prune_releases(directory, current, keep):
+    """Fica com a versão em uso e as `keep` mais novas; tira sobras de uma
+    instalação interrompida. Só apaga pasta com nome de versão e com o
+    hypr/pomar.lua dentro; com `releases` sendo um link, não mexe em nada."""
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        return
+
+    def is_release(path):
+        return (RELEASE_NAME.fullmatch(path.name) is not None and path.is_dir() and not path.is_symlink()
+                and (path / "hypr/pomar.lua").is_file())
+
+    releases = [p for p in root.iterdir() if is_release(p)]
+    others = sorted((p for p in releases if p.name != current), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in others[int(keep):]:
+        shutil.rmtree(old)
+    for leftover in root.iterdir():
+        if re.fullmatch(r"\.(?:montando|antiga)-\d+", leftover.name) and leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+def cmd_plugins_in(directory, links_into=None):
+    """Uma linha por plugin: pasta, id, tipos (separados por vírgula) e nome."""
+    root = Path(directory)
+    if not root.is_dir():
+        return
+    prefix = os.path.normpath(links_into) if links_into else None
+    for manifest in sorted(root.glob("*/manifest.json")):
+        folder = manifest.parent
+        if folder.name.startswith("."):
+            continue
+        if prefix is not None:
+            if not folder.is_symlink():
+                continue
+            target = os.path.normpath(os.path.join(folder.parent, os.readlink(folder)))
+            if target != prefix and not target.startswith(prefix + "/"):
+                continue
+        try:
+            info = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(info, dict):
+            continue
+        wid = str(info.get("id") or folder.name)
+        kinds = info.get("kinds") if isinstance(info.get("kinds"), list) else []
+        name = str(info.get("name") or wid).replace("\t", " ")
+        print("\t".join((folder.name, wid, ",".join(str(k) for k in kinds), name)))
+
+
+def cmd_plugin_states(listing, ids):
+    """Estado de cada peça segundo `omarchy plugin list --json`."""
+    try:
+        plugins = json.loads(listing)
+    except ValueError:
+        plugins = []
+    by_id = {p.get("id"): p for p in plugins if isinstance(p, dict)} if isinstance(plugins, list) else {}
+    for wid in ids:
+        plugin = by_id.get(wid)
+        state = "unknown" if plugin is None else ("enabled" if plugin.get("enabled") else "disabled")
+        print(f"{wid}\t{state}")
+
+
+def cmd_plugins_known(listing, ids):
+    try:
+        plugins = json.loads(listing)
+    except ValueError:
+        sys.exit(1)
+    known = {p.get("id") for p in plugins if isinstance(p, dict)} if isinstance(plugins, list) else set()
+    sys.exit(0 if all(wid in known for wid in ids) else 1)
+
+
+# -------------------------------------------------------------- lançador
+def desktop_quote(path):
+    """Caminho entre aspas para o Exec= de um .desktop, com os escapes da
+    especificação (aplicados duas vezes, como ela pede)."""
+    out = []
+    for char in path:
+        if char in '"`$':
+            out.append("\\\\" + char)
+        elif char == "\\":
+            out.append("\\\\\\\\")
+        elif char == "%":
+            out.append("%%")
+        else:
+            out.append(char)
+    return '"' + "".join(out) + '"'
+
+
+def cmd_install_desktop(template, destination, exec_path):
+    rendered = Path(template).read_text(encoding="utf-8").replace("@POMAR_BIN@", desktop_quote(exec_path))
+    target = Path(destination)
+    if target.is_file() and read_text(target) == rendered:
+        emit("status", "unchanged")
+        return
+    write_text(target, rendered)
+    emit("status", "changed")
+
+
+def cmd_write_copy(source, destination):
+    data = Path(source).read_bytes()
+    target = Path(destination)
+    if target.is_file() and target.read_bytes() == data:
+        emit("status", "unchanged")
+        return
+    write_atomic(target, data)
+    emit("status", "changed")
+
+
+# ------------------------------------------------------ janelas minimizadas
+def cmd_minimized_windows(listing):
+    """Endereços das janelas na mesa escondida do Dock, segundo `hyprctl -j clients`."""
+    try:
+        clients = json.loads(listing)
+    except ValueError:
+        clients = []
+    for client in clients if isinstance(clients, list) else []:
+        if not isinstance(client, dict):
+            continue
+        workspace = client.get("workspace") if isinstance(client.get("workspace"), dict) else {}
+        address = str(client.get("address") or "")
+        if workspace.get("name") == MINIMIZED and re.fullmatch(r"0x[0-9a-fA-F]+", address):
+            print(address)
+
+
+def cmd_active_workspace(listing):
+    """Número da mesa ativa, segundo `hyprctl -j activeworkspace` (1 se não der)."""
+    try:
+        info = json.loads(listing)
+    except ValueError:
+        info = {}
+    number = info.get("id") if isinstance(info, dict) else None
+    print(number if isinstance(number, int) and not isinstance(number, bool) and number > 0 else 1)
+
+
+# ------------------------------------------------- o que foi tirado do lugar
+def cmd_register_move(origin, stored):
+    STATE.mkdir(parents=True, exist_ok=True)
+    with MOVES.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"from": origin, "to": stored}, ensure_ascii=False) + "\n")
+
+
+def cmd_restore_moves():
+    """Devolve ao lugar o que o instalador tirou do caminho, se o lugar está
+    livre. O que não dá para devolver continua guardado, e anotado."""
+    if not MOVES.exists():
+        emit("status", "0")
+        return
+    entries = []
+    for line in MOVES.read_text(encoding="utf-8").splitlines():
+        with contextlib.suppress(ValueError):
+            entry = json.loads(line)
+            if isinstance(entry, dict) and entry.get("from") and entry.get("to"):
+                entries.append(entry)
+    remaining, restored = [], 0
+    for entry in entries:
+        origin, stored = Path(entry["from"]), Path(entry["to"])
+        if not os.path.lexists(stored):
+            continue
+        if os.path.lexists(origin):
+            remaining.append(entry)
+            emit("note", L(f"Kept in {pretty(stored)} (something already exists at {pretty(origin)})",
+                           f"Ficou guardado em {pretty(stored)} (já existe algo em {pretty(origin)})"))
+            continue
+        origin.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(stored), str(origin))
+        restored += 1
+        emit("ok", L(f"{pretty(origin)} is back in place", f"{pretty(origin)} voltou para o lugar"))
+    if remaining:
+        write_text(MOVES, "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in remaining))
+    else:
+        MOVES.unlink()
+    emit("status", str(restored))
+
+
+# ------------------------------------------------------------------- outros
+def cmd_active():
+    """Sai com 0 quando o Pomarchy está valendo (tema pomar* ou alwaysOn)."""
+    theme = ""
+    with contextlib.suppress(OSError):
+        theme = THEME_NAME.read_text(encoding="utf-8").strip()
+    if theme.startswith("pomar"):
+        sys.exit(0)
+    with contextlib.suppress(OSError, ValueError):
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        if isinstance(settings, dict) and settings.get("alwaysOn") is True:
+            sys.exit(0)
+    sys.exit(1)
+
+
+def mac_bar_wanted():
+    """A barra de menus do Mac está escolhida? Fica num arquivo do próprio
+    Pomarchy (~/.local/state/pomar/barra), não nos ajustes da pessoa."""
+    with contextlib.suppress(OSError):
+        return BAR_CHOICE.read_text(encoding="utf-8").strip() != "omarchy"
+    return True
+
+
+def cmd_mac_bar_wanted():
+    sys.exit(0 if mac_bar_wanted() else 1)
+
+
+def cmd_mac_bar_choose(value):
+    """Grava a escolha da barra (pomar bar mac/restore, install --no-bar)."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    write_text(BAR_CHOICE, ("mac" if value == "on" else "omarchy") + "\n")
+
+
+def cmd_json_list(text):
+    """Sai com 0 quando o texto é uma lista JSON inteira (a resposta do hyprctl)."""
+    try:
+        sys.exit(0 if isinstance(json.loads(text), list) else 1)
+    except ValueError:
+        sys.exit(1)
+
+
+def cmd_json_check(path):
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sys.exit(1)
+    sys.exit(0 if isinstance(value, dict) else 1)
+
+
+COMMANDS = {
+    "bar-mac": lambda a: cmd_bar_mac(),
+    "bar-restore-write": lambda a: cmd_bar_restore_write(),
+    "bar-restore-check": lambda a: cmd_bar_restore_check(),
+    "bar-restore-finish": lambda a: cmd_bar_restore_finish(),
+    "shell-origin-note": lambda a: cmd_shell_origin_note(),
+    "bar-status": lambda a: cmd_bar_status(),
+    "plugins-on": lambda a: cmd_plugins_on(a),
+    "plugins-off": lambda a: cmd_plugins_off(a),
+    "plugins-check": lambda a: cmd_plugins_check(a[0], a[1:]),
+    "plugins-in": lambda a: cmd_plugins_in(a[0], a[2] if len(a) > 2 and a[1] == "--links-into" else None),
+    "plugin-states": lambda a: cmd_plugin_states(a[0], a[1:]),
+    "plugins-known": lambda a: cmd_plugins_known(a[0], a[1:]),
+    "settings-init": lambda a: cmd_settings_init(),
+    "mac-bar-wanted": lambda a: cmd_mac_bar_wanted(),
+    "mac-bar-choose": lambda a: cmd_mac_bar_choose(a[0]),
+    "json-list": lambda a: cmd_json_list(a[0]),
+    "settings-summary": lambda a: cmd_settings_summary(),
+    "hypr-add": lambda a: cmd_hypr_add(a[0]),
+    "hypr-remove": lambda a: cmd_hypr_remove(a[0]),
+    "hypr-check": lambda a: cmd_hypr_check(a[0]),
+    "same-tree": lambda a: cmd_same_tree(a[0], a[1]),
+    "prune-releases": lambda a: cmd_prune_releases(a[0], a[1], a[2]),
+    "install-desktop": lambda a: cmd_install_desktop(a[0], a[1], a[2]),
+    "write-copy": lambda a: cmd_write_copy(a[0], a[1]),
+    "active": lambda a: cmd_active(),
+    "json-check": lambda a: cmd_json_check(a[0]),
+    "minimized-windows": lambda a: cmd_minimized_windows(a[0]),
+    "active-workspace": lambda a: cmd_active_workspace(a[0]),
+    "register-move": lambda a: cmd_register_move(a[0], a[1]),
+    "restore-moves": lambda a: cmd_restore_moves(),
+}
+
+try:
+    COMMANDS[sys.argv[1]](sys.argv[2:])
+except Fail as problem:
+    emit("err", str(problem))
+    sys.exit(1)
+PY
+}
+
+# ------------------------------------------------------------------- eventos
+pomar_event() {
+  local out
+  command -v hyprctl >/dev/null 2>&1 || die "$(L "Couldn't find Hyprland (hyprctl)." "Não achei o Hyprland (hyprctl).")"
+  if ! out=$(hyprctl dispatch "hl.dsp.event(\"pomar>>$1\")" 2>&1); then
+    die "$(L "Couldn't talk to Hyprland. Is it running? ${out}" "Não consegui falar com o Hyprland. Ele está rodando? ${out}")"
+  fi
+  [[ -z $out || $out == ok ]] || die "$(L "Hyprland didn't accept the request: $out" "O Hyprland não aceitou o pedido: $out")"
+}
+
+# Com um tema que não é do Pomarchy, nada do Pomarchy aparece. Avisa em vez de ficar
+# quieto: no terminal, uma linha; aberto pelo lançador, uma notificação.
+warn_if_off() {
+  pomar_py active && return 0
+  if [[ -t 2 ]]; then
+    warn "$(L "Pomarchy is off: the current theme isn't Pomarchy. To turn it on: omarchy theme set pomarchy" \
+      "O Pomarchy está desligado: o tema atual não é o Pomarchy. Para ligar: omarchy theme set pomarchy")" >&2
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send -a Pomarchy "$(L "Pomarchy is off" "Pomarchy desligado")" \
+      "$(L "Pick the Pomarchy theme in Menu > Style > Theme to use the Dock, Launchpad and the rest." \
+        "Escolha o tema Pomarchy em Menu > Estilo > Tema para usar o Dock, o Launchpad e o resto.")" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+# ------------------------------------------------------------------ comandos
+cmd_help() {
+  if [[ ${POMAR_UI_LANG:-en} == pt ]]; then
+    cat <<'EOF'
+Pomarchy OS: o Omarchy com jeito de Mac.
+
+Uso: pomar [--lang en|pt] <comando>
+
+  open launchpad          abre ou fecha o Launchpad (todos os apps)
+  open mission            abre ou fecha o Mission Control (todas as janelas)
+  open expose             mostra só as janelas do app em uso
+  open switcher           passa para o próximo app (como o Cmd+Tab)
+  open settings [página]  abre os Ajustes do Pomarchy
+  open welcome            mostra de novo a tela de boas-vindas
+  dock autohide           liga ou desliga o Dock que se esconde sozinho
+  bar mac                 barra de menus no estilo Mac
+  bar restore             volta a barra do Omarchy como era antes
+  bar status              diz qual barra está valendo
+  doctor                  confere a instalação e explica o que corrigir
+  version                 mostra a versão instalada
+  help                    mostra esta ajuda
+
+Para desinstalar: ~/.local/share/pomar/current/uninstall.sh
+EOF
+  else
+    cat <<'EOF'
+Pomarchy OS: Omarchy with a Mac feel.
+
+Usage: pomar [--lang en|pt] <command>
+
+  open launchpad          opens or closes Launchpad (all apps)
+  open mission            opens or closes Mission Control (all windows)
+  open expose             shows only the windows of the app in use
+  open switcher           switches to the next app (like Cmd+Tab)
+  open settings [page]    opens Pomarchy Settings
+  open welcome            shows the welcome screen again
+  dock autohide           turns the self-hiding Dock on or off
+  bar mac                 Mac-style menu bar
+  bar restore             brings back the Omarchy bar as it was before
+  bar status              says which bar is in use
+  doctor                  checks the installation and explains what to fix
+  version                 shows the installed version
+  help                    shows this help
+
+To uninstall: ~/.local/share/pomar/current/uninstall.sh
+EOF
+  fi
+}
+
+open_settings() {
+  local page="${1:-}" payload='{}' out
+  if [[ -n $page ]]; then
+    [[ $page =~ ^[A-Za-z0-9_-]+$ ]] || die "$(L "Invalid page: $page (use only letters, numbers, - and _)." "Página inválida: $page (use só letras, números, - e _).")"
+    payload="{\"page\":\"$page\"}"
+  fi
+  warn_if_off
+  command -v omarchy-shell >/dev/null 2>&1 || die "$(L "Couldn't find omarchy-shell. Pomarchy needs Omarchy 4." "Não achei o omarchy-shell. O Pomarchy precisa do Omarchy 4.")"
+  out=$(omarchy-shell shell summon pomar.settings "$payload" 2>&1) ||
+    die "$(L "The Omarchy shell isn't responding right now. Try again in a few seconds." "O shell do Omarchy não está respondendo agora. Tente de novo em alguns segundos.")"
+  [[ $out == ok ]] || die "$(L "Pomarchy Settings isn't turned on in Omarchy. To see what happened: pomar doctor" \
+    "Os Ajustes do Pomarchy não estão ligados no Omarchy. Para ver o que houve: pomar doctor")"
+}
+
+cmd_open() {
+  local target="${1:-}"
+  case "$target" in
+    launchpad) warn_if_off; pomar_event "launchpad:toggle" ;;
+    mission) warn_if_off; pomar_event "mission:toggle" ;;
+    expose) warn_if_off; pomar_event "mission:expose" ;;
+    switcher) warn_if_off; pomar_event "switcher:next" ;;
+    settings) open_settings "${2:-}" ;;
+    welcome) open_settings welcome ;;
+    *) die "$(L "Don't know how to open \"$target\". You can open: launchpad, mission, expose, switcher, settings, welcome." \
+      "Não sei abrir \"$target\". Dá para abrir: launchpad, mission, expose, switcher, settings, welcome.")" ;;
+  esac
+}
+
+cmd_dock() {
+  case "${1:-}" in
+    autohide) warn_if_off; pomar_event "dock:autohide-toggle" ;;
+    *) die "$(L "Usage: pomar dock autohide" "Uso: pomar dock autohide")" ;;
+  esac
+}
+
+# Volta a barra guardada e só apaga a cópia depois de ver, no disco, que ela
+# ficou: com o shell rodando, pede para ele reler o arquivo e confere; se ele
+# gravou a barra antiga por cima, grava de novo (até 3 vezes).
+bar_restore_firmly() {
+  local attempt
+  if [[ ! -f $POMAR_BAR_BACKUP ]]; then
+    kit bar-restore-write || return 1
+    kit bar-restore-finish || return 1
+    return 0
+  fi
+  for attempt in 1 2 3; do
+    kit bar-restore-write || return 1
+    if shell_running; then
+      omarchy-shell shell reloadConfig >/dev/null 2>&1 || true
+      sleep "${POMAR_SHELL_SETTLE:-0.5}"
+    fi
+    # O finish confere de novo antes de apagar a cópia (sai com 1 se o shell
+    # gravou por cima nesse meio-tempo).
+    if pomar_py bar-restore-check && kit bar-restore-finish; then
+      return 0
+    fi
+  done
+  warn "$(L "The Omarchy shell wrote the previous bar back over it 3 times; the copy of the original bar is still saved." \
+    "O shell do Omarchy gravou a barra de antes por cima 3 vezes; a cópia da barra original continua guardada.")"
+  say "  $(L "Try again in a moment: pomar bar restore" "Tente de novo daqui a pouco: pomar bar restore")"
+  return 1
+}
+
+# Os "|| return 1" são de propósito: chamada dentro de um "||", a função perde o
+# "set -e" e seguiria em frente depois de um erro.
+cmd_bar() {
+  case "${1:-status}" in
+    mac)
+      pomar_py mac-bar-choose on || return 1
+      kit bar-mac || return 1
+      [[ $PY_STATUS != changed ]] || refresh_shell
+      ;;
+    restore)
+      pomar_py mac-bar-choose off || return 1
+      bar_restore_firmly || return 1
+      ;;
+    # A barra acompanha o tema: Pomarchy ligado, barra do Mac; desligado, a do
+    # Omarchy de antes (o gancho theme-set chama isto a cada troca de tema).
+    # Pomarchy ligado e a barra do Mac escolhida: barra do Mac; senão, a do
+    # Omarchy de antes (o gancho theme-set chama isto a cada troca de tema).
+    auto)
+      if pomar_py active && pomar_py mac-bar-wanted; then
+        kit bar-mac || return 1
+        [[ $PY_STATUS != changed ]] || refresh_shell
+      elif [[ -f $POMAR_BAR_BACKUP ]]; then
+        bar_restore_firmly || return 1
+      fi
+      ;;
+    status) kit bar-status || return 1 ;;
+    *) die "$(L "Usage: pomar bar mac|restore|auto|status" "Uso: pomar bar mac|restore|auto|status")" ;;
+  esac
+}
+
+release_label() {
+  local root real_releases
+  root=$(readlink -f -- "$POMAR_ROOT")
+  real_releases=$(readlink -f -- "$POMAR_RELEASES" 2>/dev/null || printf '%s' "$POMAR_RELEASES")
+  case "$root" in
+    "$real_releases"/*) printf '%s' "${root##*/}" ;;
+    *) printf '%s %s' "$(L "copy at" "cópia em")" "$(pretty "$POMAR_ROOT")" ;;
+  esac
+}
+
+cmd_version() {
+  local version="?"
+  [[ -f $POMAR_ROOT/VERSION ]] && version=$(tr -d '[:space:]' <"$POMAR_ROOT/VERSION")
+  say "Pomarchy $version ($(release_label))"
+}
+
+link_is() { [[ -L $1 && $(readlink -- "$1") == "$2" && -e $1 ]]; }
+
+cmd_doctor() {
+  local problems=0 name id kinds label dir missing status errors
+  local -a ids=() plugin_dirs=()
+  say "$(L "Pomarchy: checking the installation" "Pomarchy: conferindo a instalação")"
+  say ""
+
+  if [[ -L $POMAR_CURRENT && -f $POMAR_CURRENT/hypr/pomar.lua ]]; then
+    local release version
+    release=$(readlink -- "$POMAR_CURRENT")
+    version=$(tr -d '[:space:]' <"$POMAR_CURRENT/VERSION" 2>/dev/null || true)
+    ok "$(L "Pomarchy files (version ${version:-?}, ${release##*/})" "Arquivos do Pomarchy (versão ${version:-?}, ${release##*/})")"
+    while IFS=$'\t' read -r dir id kinds label; do
+      plugin_dirs+=("$dir")
+      [[ ,$kinds, == *,bar-widget,* ]] || ids+=("$id")
+    done < <(pomar_py plugins-in "$POMAR_CURRENT/plugins")
+  else
+    bad "$(L "The Pomarchy files aren't in $(pretty "$POMAR_CURRENT")." "Os arquivos do Pomarchy não estão em $(pretty "$POMAR_CURRENT").")"
+    fix "$(L "install again (see the Pomarchy README)." "instale de novo (veja o README do Pomarchy).")"
+    problems=$((problems + 1))
+  fi
+
+  if link_is "$POMAR_BIN_LINK" "$POMAR_CURRENT/bin/pomar"; then
+    ok "$(L "pomar command" "Comando pomar")"
+  else
+    bad "$(L "The pomar command isn't at $(pretty "$POMAR_BIN_LINK")." "O comando pomar não está em $(pretty "$POMAR_BIN_LINK").")"
+    fix "$(L "run the installer again." "rode o instalador de novo.")"
+    problems=$((problems + 1))
+  fi
+
+  missing=""
+  for name in pomarchy pomarchy-escuro; do
+    link_is "$OMARCHY_THEMES/$name" "$POMAR_CURRENT/themes/$name" || missing+=" $name"
+  done
+  if [[ -z $missing ]]; then
+    ok "$(L "Pomarchy and Pomarchy Escuro themes" "Temas Pomarchy e Pomarchy Escuro")"
+  else
+    bad "$(L "Themes missing in $(pretty "$OMARCHY_THEMES"):$missing" "Faltam temas em $(pretty "$OMARCHY_THEMES"):$missing")"
+    fix "$(L "run the installer again." "rode o instalador de novo.")"
+    problems=$((problems + 1))
+  fi
+
+  if ((${#plugin_dirs[@]})); then
+    missing=""
+    for dir in "${plugin_dirs[@]}"; do
+      link_is "$OMARCHY_PLUGINS/$dir" "$POMAR_CURRENT/plugins/$dir" || missing+=" $dir"
+    done
+    if [[ -z $missing ]]; then
+      ok "$(L "Pomarchy plugins in Omarchy (${#plugin_dirs[@]})" "Peças do Pomarchy no Omarchy (${#plugin_dirs[@]})")"
+    else
+      bad "$(L "Plugins missing in $(pretty "$OMARCHY_PLUGINS"):$missing" "Faltam peças em $(pretty "$OMARCHY_PLUGINS"):$missing")"
+      fix "$(L "run the installer again." "rode o instalador de novo.")"
+      problems=$((problems + 1))
+    fi
+  fi
+
+  kit hypr-check "$HYPR_CONFIG"
+  if [[ $PY_STATUS == ok && -s $POMAR_HYPR_ERROR ]]; then
+    bad "$(L "Hyprland couldn't load pomar.lua: $(head -n 1 "$POMAR_HYPR_ERROR")" "O Hyprland não conseguiu carregar o pomar.lua: $(head -n 1 "$POMAR_HYPR_ERROR")")"
+    fix "$(L "run the installer again; if it keeps happening, uninstall with ~/.local/share/pomar/current/uninstall.sh" \
+        "rode o instalador de novo; se continuar, desinstale com ~/.local/share/pomar/current/uninstall.sh")"
+    problems=$((problems + 1))
+    PY_STATUS=reported
+  fi
+  case "$PY_STATUS" in
+    reported) ;;
+    ok) ok "$(L "Gestures, shortcuts and animations are on in Hyprland" "Gestos, atalhos e animações ligados no Hyprland")" ;;
+    missing-file)
+      bad "$(L "Couldn't find $(pretty "$HYPR_CONFIG"); Pomarchy needs the Omarchy 4 Lua configuration." \
+        "Não achei $(pretty "$HYPR_CONFIG"); o Pomarchy precisa da configuração em Lua do Omarchy 4.")"
+      problems=$((problems + 1))
+      ;;
+    absent)
+      bad "$(L "Hyprland doesn't load Pomarchy (the Pomarchy block is missing from hyprland.lua)." \
+        "O Hyprland não carrega o Pomarchy (falta o bloco do Pomarchy no hyprland.lua).")"
+      fix "$(L "run the installer again; it puts the block back." "rode o instalador de novo; ele põe o bloco de volta.")"
+      problems=$((problems + 1))
+      ;;
+    misplaced)
+      bad "$(L "The Pomarchy block in hyprland.lua isn't right after the Omarchy defaults." \
+        "O bloco do Pomarchy no hyprland.lua não está logo depois dos padrões do Omarchy.")"
+      fix "$(L "run the installer again; it moves the block to the right place." "rode o instalador de novo; ele põe o bloco no lugar certo.")"
+      problems=$((problems + 1))
+      ;;
+    different)
+      bad "$(L "The Pomarchy block in hyprland.lua is from an earlier version (or was changed)." \
+        "O bloco do Pomarchy no hyprland.lua é de uma versão anterior (ou foi mudado).")"
+      fix "$(L "run the installer again; it replaces the block with the current one." "rode o instalador de novo; ele troca o bloco pelo atual.")"
+      problems=$((problems + 1))
+      ;;
+    *)
+      bad "$(L "The Pomarchy block in hyprland.lua is repeated, incomplete or changed." \
+        "O bloco do Pomarchy no hyprland.lua está repetido, pela metade ou mudado.")"
+      fix "$(L "delete the lines between '-- >>> pomar >>>' and '-- <<< pomar <<<' and run the installer again." \
+        "apague as linhas entre '-- >>> pomar >>>' e '-- <<< pomar <<<' e rode o instalador de novo.")"
+      problems=$((problems + 1))
+      ;;
+  esac
+
+  if ((${#ids[@]})); then
+    local off="" listing state
+    if shell_running && listing=$(omarchy plugin list --json 2>/dev/null); then
+      while IFS=$'\t' read -r id state; do
+        [[ $state == enabled ]] || off+=" $id"
+      done < <(pomar_py plugin-states "$listing" "${ids[@]}")
+    else
+      off=$(pomar_py plugins-check on "${ids[@]}" || true)
+      [[ -z $off ]] || off=" $off"
+    fi
+    if [[ -z $off ]]; then
+      ok "$(L "Dock, Launchpad, Mission Control, app switcher, Settings and core are on" "Dock, Launchpad, Mission Control, alternador, Ajustes e base ligados")"
+    else
+      bad "$(L "Plugins turned off in Omarchy:$off" "Peças desligadas no Omarchy:$off")"
+      fix "$(L "run the installer again, or turn each one on with: omarchy plugin enable <plugin>" \
+        "rode o instalador de novo, ou ligue cada uma com: omarchy plugin enable <peça>")"
+      problems=$((problems + 1))
+    fi
+  fi
+
+  kit bar-status || problems=$((problems + 1))
+
+  name=$(current_theme)
+  if [[ $name == pomar* ]]; then
+    ok "$(L "Current theme: $(theme_title "$name")" "Tema atual: $(theme_title "$name")")"
+  elif pomar_py active; then
+    ok "$(L "Current theme: $(theme_title "${name:-unknown}") (Pomarchy stays on with any theme)" \
+      "Tema atual: $(theme_title "${name:-desconhecido}") (o Pomarchy fica ligado com qualquer tema)")"
+  else
+    note "$(L "The current theme is $(theme_title "${name:-unknown}"); Pomarchy only shows up with a Pomarchy theme." \
+      "O tema atual é $(theme_title "${name:-desconhecido}"); o Pomarchy só aparece com um tema Pomarchy.")"
+    say "  $(L "To turn it on: omarchy theme set pomarchy (or Menu > Style > Theme)" "Para ligar: omarchy theme set pomarchy (ou Menu > Estilo > Tema)")"
+  fi
+
+  if [[ ! -e $POMAR_SETTINGS ]]; then
+    note "$(L "No settings file; the Pomarchy defaults apply" "Sem arquivo de ajustes; valem os padrões do Pomarchy")"
+  elif pomar_py json-check "$POMAR_SETTINGS"; then
+    ok "$(L "Settings in $(pretty "$POMAR_SETTINGS")" "Ajustes em $(pretty "$POMAR_SETTINGS")")"
+  else
+    bad "$(L "The file $(pretty "$POMAR_SETTINGS") has a typo; Pomarchy is using the defaults." \
+      "O arquivo $(pretty "$POMAR_SETTINGS") tem um erro de digitação; o Pomarchy está usando os padrões.")"
+    fix "$(L "fix the file or delete it (Pomarchy Settings creates a new one)." "conserte o arquivo ou apague-o (os Ajustes do Pomarchy criam um novo).")"
+    problems=$((problems + 1))
+  fi
+
+  if hypr_running; then
+    errors=$(hypr_errors)
+    if [[ -z $errors ]]; then
+      ok "$(L "Hyprland has no configuration errors" "Hyprland sem erros de configuração")"
+    else
+      bad "$(L "Hyprland shows configuration errors:" "O Hyprland mostra erros de configuração:")"
+      local line
+      while IFS= read -r line; do say "    $line"; done < <(head -n 5 <<<"$errors")
+      if grep -qi pomar <<<"$errors"; then
+        fix "$(L "run the installer again; if it keeps happening, uninstall with ~/.local/share/pomar/current/uninstall.sh" \
+        "rode o instalador de novo; se continuar, desinstale com ~/.local/share/pomar/current/uninstall.sh")"
+      else
+        fix "$(L "the error is in your Hyprland configuration (~/.config/hypr), not in Pomarchy." "o erro está na sua configuração do Hyprland (~/.config/hypr), não no Pomarchy.")"
+      fi
+      problems=$((problems + 1))
+    fi
+  else
+    note "$(L "Hyprland isn't running; couldn't check its errors" "O Hyprland não está rodando; não deu para conferir os erros dele")"
+  fi
+
+  missing=""
+  for name in pomar-launchpad pomar-mission-control pomar-settings; do
+    [[ -f $APPS_DIR/$name.desktop ]] || missing+=" $name.desktop"
+    [[ -f $ICONS_DIR/$name.svg ]] || missing+=" $name.svg"
+  done
+  if [[ -z $missing ]]; then
+    ok "$(L "Launcher shortcuts (Launchpad, Mission Control, Pomarchy Settings)" "Atalhos no lançador (Launchpad, Mission Control, Ajustes do Pomarchy)")"
+  else
+    bad "$(L "Launcher shortcuts missing:$missing" "Faltam atalhos do lançador:$missing")"
+    fix "$(L "run the installer again." "rode o instalador de novo.")"
+    problems=$((problems + 1))
+  fi
+
+  say ""
+  if ((problems == 0)); then
+    say "$(L "All good." "Tudo certo.")"
+  else
+    say "$(L "Found $problems problem(s). Follow the \"How to fix\" for each one." "Encontrei $problems problema(s). Siga o \"Como corrigir\" de cada um.")"
+    return 1
+  fi
+}
+
+pomar_main() {
+  local value
+  # pomar --lang en|pt <comando>: o idioma só deste comando.
+  if [[ ${1:-} == --lang || ${1:-} == --lang=* ]]; then
+    if [[ $1 == --lang=* ]]; then
+      value="${1#--lang=}"
+      shift
+    else
+      value="${2:-}"
+      shift
+      (($# == 0)) || shift
+    fi
+    case "${value,,}" in
+      en | pt) pomar_lang "${value,,}" ;;
+      *)
+        printf '%s\n\n' "$(L "Unknown language: \"$value\" (use en or pt)" "Idioma desconhecido: \"$value\" (use en ou pt)")" >&2
+        cmd_help >&2
+        exit 2
+        ;;
+    esac
+  fi
+  local command="${1:-help}"
+  if (($# > 0)); then shift; fi
+  case "$command" in
+    open) cmd_open "$@" ;;
+    dock) cmd_dock "$@" ;;
+    bar) cmd_bar "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    version | --version | -v) cmd_version ;;
+    help | --help | -h) cmd_help ;;
+    *)
+      printf '%s\n\n' "$(L "Unknown command: $command" "Comando desconhecido: $command")" >&2
+      cmd_help >&2
+      exit 2
+      ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  pomar_main "$@"
+fi

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Ícone do Pomar (omarchy-pomar): Launchpad, uma grade de apps coloridos. -->
+  <defs>
+    <linearGradient id="fundo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a5566"/>
+      <stop offset="1" stop-color="#1c2129"/>
+    </linearGradient>
+    <linearGradient id="brilho" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="luz" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.38"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="6" y="6" width="116" height="116" rx="27" fill="url(#fundo)"/>
+    <rect x="6" y="6" width="116" height="116" rx="27" fill="url(#brilho)"/>
+    <rect x="6.5" y="6.5" width="115" height="115" rx="26.5" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
+  </g>
+  <g>
+    <rect x="19" y="19" width="24" height="24" rx="7" fill="#f2564a"/>
+    <rect x="52" y="19" width="24" height="24" rx="7" fill="#f7a531"/>
+    <rect x="85" y="19" width="24" height="24" rx="7" fill="#f7cf2f"/>
+    <rect x="19" y="52" width="24" height="24" rx="7" fill="#4cc15e"/>
+    <rect x="52" y="52" width="24" height="24" rx="7" fill="#2fb7c9"/>
+    <rect x="85" y="52" width="24" height="24" rx="7" fill="#4b86f2"/>
+    <rect x="19" y="85" width="24" height="24" rx="7" fill="#8a63ee"/>
+    <rect x="52" y="85" width="24" height="24" rx="7" fill="#ec5fb4"/>
+    <rect x="85" y="85" width="24" height="24" rx="7" fill="#f47d3c"/>
+  </g>
+  <g fill="url(#luz)">
+    <rect x="19" y="19" width="24" height="24" rx="7"/>
+    <rect x="52" y="19" width="24" height="24" rx="7"/>
+    <rect x="85" y="19" width="24" height="24" rx="7"/>
+    <rect x="19" y="52" width="24" height="24" rx="7"/>
+    <rect x="52" y="52" width="24" height="24" rx="7"/>
+    <rect x="85" y="52" width="24" height="24" rx="7"/>
+    <rect x="19" y="85" width="24" height="24" rx="7"/>
+    <rect x="52" y="85" width="24" height="24" rx="7"/>
+    <rect x="85" y="85" width="24" height="24" rx="7"/>
+  </g>
+</svg>

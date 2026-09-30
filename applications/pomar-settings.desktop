@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Ajustes do Pomarchy
+Name[en]=Pomarchy Settings
+GenericName=Ajustes
+GenericName[en]=Settings
+Comment=Dock, gestos, atalhos e aparência do Pomarchy
+Comment[en]=Pomarchy's Dock, gestures, shortcuts and look
+Exec=@POMAR_BIN@ open settings
+Icon=pomar-settings
+Terminal=false
+Categories=Settings;
+Keywords=ajustes;preferências;configurações;dock;gestos;atalhos;pomar;
+Keywords[en]=settings;preferences;dock;gestures;shortcuts;pomar;
+StartupNotify=false
+X-Pomar=true

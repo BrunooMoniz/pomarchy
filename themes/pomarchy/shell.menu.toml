@@ -1,0 +1,12 @@
+# Menus e busca no estilo Mac: vidro, seleção azul com texto branco.
+[menu]
+background = "#f6f6f8"
+background-alpha = 0.92
+text = "#1d1d1f"
+border-alpha = 0.18
+scrim = "#000000"
+scrim-alpha = 0.12
+selected-background = "#007aff"
+selected-background-alpha = 1.0
+selected-text = "#ffffff"
+selected-border-alpha = 0.0

@@ -1,0 +1,7 @@
+# Barra de menus translúcida, fina, como a do Mac.
+[bar]
+background = "#f6f6f8"
+background-alpha = 0.82
+text = "#1d1d1f"
+active = "#007aff"
+size-horizontal = 28

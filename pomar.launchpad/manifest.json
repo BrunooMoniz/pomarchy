@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "pomar.launchpad",
+  "name": "Pomarchy Launchpad",
+  "version": "0.1.0",
+  "author": "Bruno Moniz",
+  "description": "Every installed app on one full-screen page, with search and pages.",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Launchpad.qml"
+  }
+}
